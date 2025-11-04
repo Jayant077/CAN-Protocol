@@ -1,0 +1,103 @@
+Receiver code --------------------------
+
+#include <SPI.h>
+#include <mcp2515.h>
+
+
+#define CAN_CS_PIN 10
+#define Led1 9
+#define Led2 8
+
+MCP2515 mcp2515(CAN_CS_PIN);
+struct can_frame canMsg;
+
+void setup() {
+  Serial.begin(115200);
+  SPI.begin();
+  pinMode(Led1, OUTPUT);
+  pinMode(Led2, OUTPUT);
+
+  mcp2515.reset();
+  mcp2515.setBitrate(CAN_500KBPS, MCP_8MHZ);
+  mcp2515.setNormalMode();
+
+  Serial.println("Listening for CAN frames...\n");
+}
+
+void loop() {
+  if (mcp2515.readMessage(&canMsg) == MCP2515::ERROR_OK) {
+    unsigned long id = canMsg.can_id & 0x7FF;  // 11-bit ID
+
+    Serial.println("========== CAN FRAME ==========");
+    Serial.print("ID: 0x");
+    Serial.println(id, BIN);
+
+    Serial.print("DLC: 0x");
+    Serial.println(canMsg.can_dlc, BIN);
+
+    Serial.print("DATA: ");
+    for (uint8_t i = 0; i < canMsg.can_dlc; i++) {
+      Serial.print("0x");
+      if (canMsg.data[i] < 0x10) Serial.print("0");
+      Serial.print(canMsg.data[i], BIN);
+      Serial.print(" ");
+    }
+    Serial.println("\n===============================\n");
+
+    // LED logic
+    if (id == 0x100) {
+      digitalWrite(Led1, HIGH);
+      delay(300);
+      digitalWrite(Led1, LOW);
+    } 
+    else if (id == 0x200) {
+      digitalWrite(Led2, HIGH);
+      delay(300);
+      digitalWrite(Led2, LOW);
+    }
+
+    delay(300);
+  }
+}
+------------------------------------------------------------------------------------------------------------
+
+Sender Code
+#include <SPI.h>
+#include <mcp_can.h>
+
+#define CAN_CS 15    // D8
+#define LED_PIN 2    // D4 onboard LED (active LOW)
+
+MCP_CAN CAN0(CAN_CS);
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH); // LED off initially
+
+  if (CAN0.begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) == CAN_OK) {
+    Serial.println("CAN1 Init OK!");
+  } else {
+    Serial.println("CAN1 Init Failed!");
+    while (1);
+  }
+  CAN0.setMode(MCP_NORMAL);
+  Serial.println("Sender 1 Ready (ID: 0x100)");
+}
+
+void loop() {
+  byte data[8] = {170,170,170,170,170,170,170,170};
+
+  if (CAN0.sendMsgBuf(0x1FF, 0, 8, data) == CAN_OK) {
+    Serial.println("Message Sent from ID 0x000");
+    digitalWrite(LED_PIN, LOW);   // turn LED on
+    delay(100);
+    digitalWrite(LED_PIN, HIGH);  // turn LED off
+  } else {
+    Serial.println("Send Error - ID 0x000");
+  }
+  delay(1000);
+}
+
+
+
