@@ -1,0 +1,193 @@
+Receiver //////////////////////
+#include <SPI.h>
+#include <mcp2515.h>
+
+
+#define CAN_CS_PIN 10
+#define Led1 9
+#define Led2 8
+
+MCP2515 mcp2515(CAN_CS_PIN);
+struct can_frame canMsg;
+
+void setup() {
+  Serial.begin(115200);
+  SPI.begin();
+  pinMode(Led1, OUTPUT);
+  pinMode(Led2, OUTPUT);
+
+  mcp2515.reset();
+  mcp2515.setBitrate(CAN_500KBPS, MCP_8MHZ);
+  mcp2515.setNormalMode();
+
+  Serial.println("Listening for CAN frames...\n");
+}
+
+void loop() {
+  if (mcp2515.readMessage(&canMsg) == MCP2515::ERROR_OK) {
+    unsigned long id = canMsg.can_id & 0x7FF;  // 11-bit ID
+
+    Serial.println("========== CAN FRAME ==========");
+    Serial.print("ID: 0x");
+    Serial.println(id, BIN);
+
+    Serial.print("DLC: 0x");
+    Serial.println(canMsg.can_dlc, BIN);
+
+    Serial.print("DATA: ");
+    for (uint8_t i = 0; i < canMsg.can_dlc; i++) {
+      Serial.print("0x");
+      if (canMsg.data[i] < 0x10) Serial.print("0");
+      Serial.print(canMsg.data[i], BIN);
+      Serial.print(" ");
+    }
+    Serial.println("\n===============================\n");
+
+    // LED logic
+    if (id == 0x100) {
+      digitalWrite(Led1, HIGH);
+      delay(300);
+      digitalWrite(Led1, LOW);
+    } 
+    else if (id == 0x200) {
+      digitalWrite(Led2, HIGH);
+      delay(300);
+      digitalWrite(Led2, LOW);
+    }
+
+    delay(300);
+  }
+}
+
+
+Sender 1/////////////////////////////////////
+#include <SPI.h>
+#include <mcp_can.h>
+
+#define CAN_CS 15     // D8 (CS pin for MCP2515)
+#define LED_PIN 2     // D4 onboard LED (active LOW)
+#define TRIG_PIN 5    // D1 (Ultrasonic Trigger)
+#define ECHO_PIN 4    // D2 (Ultrasonic Echo)
+
+MCP_CAN CAN0(CAN_CS);
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  digitalWrite(LED_PIN, HIGH);
+
+  if (CAN0.begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) == CAN_OK)
+    Serial.println("CAN Init OK!");
+  else {
+    Serial.println("CAN Init Failed!");
+    while (1);
+  }
+
+  CAN0.setMode(MCP_NORMAL);
+  Serial.println("Sender Ready (ID: 0x100)");
+}
+
+void loop() {
+  // Trigger the ultrasonic pulse
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  // Measure echo pulse duration
+  long duration = pulseIn(ECHO_PIN, HIGH);
+
+  // Calculate distance in cm
+  float distance = duration * 0.034 / 2.0;
+
+  // Split the float into 4 bytes
+  byte data[8] = {0};
+  unsigned int distInt = (unsigned int)(distance * 10); // send in mm
+  data[0] = (distInt >> 8) & 0xFF;
+  data[1] = distInt & 0xFF;
+
+  // Send CAN message
+  if (CAN0.sendMsgBuf(0x100, 0, 2, data) == CAN_OK) {
+    Serial.print("Sent Distance: ");
+    Serial.print(distance);
+    Serial.println(" cm");
+    digitalWrite(LED_PIN, LOW);
+    delay(100);
+    digitalWrite(LED_PIN, HIGH);
+  } else {
+    Serial.println("Send Error - ID 0x100");
+  }
+
+  delay(1000);
+}
+
+
+Sender 2/////////////////////////////////////
+#include <SPI.h>
+#include <mcp_can.h>
+#include <DHT.h>
+
+#define CAN_CS 15      // D8 (CS pin for MCP2515)
+#define LED_PIN 2      // D4 onboard LED (active LOW)
+#define DHTPIN 4       // D2 connected to DHT sensor data pin
+#define DHTTYPE DHT11  // Change to DHT22 if you're using that
+
+MCP_CAN CAN0(CAN_CS);
+DHT dht(DHTPIN, DHTTYPE);
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH);
+  dht.begin();
+
+  if (CAN0.begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) == CAN_OK) {
+    Serial.println("CAN2 Init OK!");
+  } else {
+    Serial.println("CAN2 Init Failed!");
+    while (1);
+  }
+
+  CAN0.setMode(MCP_NORMAL);
+  Serial.println("Sender 2 Ready (ID: 0x200)");
+}
+
+void loop() {
+  float humidity = dht.readHumidity();
+  float temperature = dht.readTemperature();  // Celsius
+
+  if (isnan(humidity) || isnan(temperature)) {
+    Serial.println("DHT Read Error!");
+    delay(2000);
+    return;
+  }
+
+  // Prepare CAN message (4 bytes: 2 for humidity, 2 for temperature)
+  byte data[4];
+  unsigned int humInt = (unsigned int)(humidity * 10);     // e.g. 45.3% -> 453
+  unsigned int tempInt = (unsigned int)(temperature * 10); // e.g. 25.6°C -> 256
+
+  data[0] = (humInt >> 8) & 0xFF;
+  data[1] = humInt & 0xFF;
+  data[2] = (tempInt >> 8) & 0xFF;
+  data[3] = tempInt & 0xFF;
+
+  if (CAN0.sendMsgBuf(0x500, 0, 4, data) == CAN_OK) {
+    Serial.print("Sent -> Humidity: ");
+    Serial.print(humidity);
+    Serial.print(" %, Temp: ");
+    Serial.print(temperature);
+    Serial.println(" °C");
+
+    digitalWrite(LED_PIN, LOW);
+    delay(100);
+    digitalWrite(LED_PIN, HIGH);
+  } else {
+    Serial.println("Send Error - ID 0x200");
+  }
+
+  delay(1000);
+}
